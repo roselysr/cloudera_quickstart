@@ -1,0 +1,288 @@
+// Create RDD from HDFS
+
+val myRdd = sc.textFile("/user/cloudera/sqoop_import/orders")
+
+// Create RDD from file system
+
+val productsRaw = scala.io.Source.fromFile("/home/cloudera/Documents/data-master/retail_db/products/part-00000").getLines
+
+var porductsRDD = sc.parallelize(productsRaw.toList)
+
+// Reading different file formats
+
+// JSON files are under this location on the lab
+
+sqlContext.read.json("/user/cloudera/retail_db_json/orders").show
+sqlContext.load("/user/cloudera/retail_db_json/orders", "json").show
+
+
+
+Row level transformation – map, flatMap
+Filtering Data – filter
+Performing aggregations – reduceByKey, aggregateByKey
+Joins – join, leftOuterJoin, rightOuterJoin
+Sorting and Ranking – sortByKey, groupByKey
+Set Operations – union, intersection, distinct
+and more
+
+
+
+//Row level transformations using map
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val str = orders.first
+str.split(",")(1).substring(0,10).replace("/","").toInt
+
+val orderDates = orders.map(str => str.split(",")(1).substring(0,10).replace("-","").toInt)
+
+// Not mandatory
+val orderDates = orders.map((str: String) => {
+str.split(",")(1).substring(0,10).replace("-","").toInt})
+
+orderDates.take(10).foreach(println)
+
+val ordersPairdedRDD = orders.map(order => {
+    val o = order.split(",")
+    (o(0),o(1).substring(0,10).replace("-","").toInt)
+})
+
+ordersPairdedRDD.take(10).foreach(println)
+
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val orderItemsPairedRDD = orderItems.map(orderItem => {
+  (orderItem.split(",")(1).toInt, orderItem)
+})
+
+
+
+//Using flatMap for word count
+val l = List("Hello", "How are you doing", "Let us perform word count", "As part of the word count program", "we will see how many times each word repeat")
+val l_rdd = sc.parallelize(l)
+val l_map = l_rdd.map(ele => ele.split(" ")) // this returns org.apache.spark.rdd.RDD[Array[String]]
+val l_flatMap = l_rdd.flatMap(ele => ele.split(" ")) //thiss returns org.apache.spark.rdd.RDD[String]
+val wordcount = l_flatMap.map(word => (word, "")).countByKey
+
+
+// Filtering data
+orders.filter(order => order.split(",")(3) == "COMPLETE")
+orders.count
+orders.filter(order => order.split(",")(3) == "COMPLETE").count
+// Get all the orders from 2013-09 which are in closed or complete
+orders.map(order => order.split(",")(3)).distinct.collect.foreach(println)
+val ordersFiltered = orders.filter(order => {
+  val o = order.split(",")
+  (o(3) == "COMPLETE" || o(3) == "CLOSED") && (o(1).contains("2013-09"))
+})
+ordersFiltered.take(10).foreach(println)
+ordersFiltered.count
+
+
+//Join
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+
+val ordersMap = orders.map(order => {
+  (order.split(",")(0).toInt, order.split(",")(1).substring(0, 10))
+})
+
+val orderItemsMap = orderItems.map(orderItem => {
+  val oi = orderItem.split(",")
+  (oi(1).toInt, oi(4).toFloat)
+})
+
+val ordersJoin = ordersMap.join(orderItemsMap)
+
+
+
+// Get all the orders which do not have corresponding entries in order items
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val ordersMap = orders.map(order => {
+  (order.split(",")(0).toInt, order)
+})
+val orderItemsMap = orderItems.map(orderItem => {
+  val oi = orderItem.split(",")
+  (oi(1).toInt, orderItem)
+})
+val ordersLeftOuterJoin = ordersMap.leftOuterJoin(orderItemsMap)
+val ordersLeftOuterJoinFilter = ordersLeftOuterJoin.filter(order => order._2._2 == None)
+val ordersWithNoOrderItem = ordersLeftOuterJoinFilter.map(order => order._2._1)
+ordersWithNoOrderItem.take(10).foreach(println)
+val ordersRightOuterJoin = orderItemsMap.rightOuterJoin(ordersMap)
+val ordersWithNoOrderItem = ordersRightOuterJoin.
+  filter(order => order._2._1 == None).
+  map(order => order._2._2)
+ordersWithNoOrderItem.take(10).foreach(println)
+
+
+
+// Aggregations - using actions
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+orders.map(order => (order.split(",")(3), "")).countByKey.foreach(println) //getting count for distinct values
+
+
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val orderItemsRevenue = orderItems.map(oi => oi.split(",")(4).toFloat)
+orderItemsRevenue.reduce((total, revenue) => total + revenue) //getting sum
+val orderItemsMaxRevenue = orderItemsRevenue.reduce((max, revenue) => {
+  if(max < revenue) revenue else max
+}) //getting max
+
+
+
+
+// Aggregations - groupByKey
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val orderItemsMap = orderItems.
+  map(oi => (oi.split(",")(1).toInt, oi.split(",")(4).toFloat))
+val orderItemsGBK = orderItemsMap.groupByKey
+//Get revenue per order_id
+orderItemsGBK.map(rec => (rec._1, rec._2.toList.sum)).take(10).foreach(println)
+//Get data in descending order by order_item_subtotal for each order_id
+val ordersSortedByRevenue = orderItemsGBK.
+  flatMap(rec => {
+    rec._2.toList.sortBy(o => -o).map(k => (rec._1, k))
+  })
+
+
+
+// Aggregations - reduceByKey
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val orderItemsMap = orderItems.
+  map(oi => (oi.split(",")(1).toInt, oi.split(",")(4).toFloat))
+
+val revenuePerOrderId = orderItemsMap.
+  reduceByKey((total, revenue) => total + revenue)
+
+val minRevenuePerOrderId = orderItemsMap.
+  reduceByKey((min, revenue) => if(min > revenue) revenue else min)
+
+
+  // Aggregations - aggregateByKey
+val orderItems = sc.textFile("/user/cloudera/sqoop_import/order_items")
+val orderItemsMap = orderItems.
+  map(oi => (oi.split(",")(1).toInt, oi.split(",")(4).toFloat))
+
+//(order_id, order_item_subtotal)
+val revenueAndMaxPerProductId = orderItemsMap.
+  aggregateByKey((0.0f, 0.0f))(
+    (inter, subtotal) => (inter._1 + subtotal, if(subtotal > inter._2) subtotal else inter._2),
+    (total, inter) => (total._1 + inter._1, if(total._2 > inter._2) total._2 else inter._2)
+  )
+//(order_id, (order_revenue, max_order_item_subtotal))
+
+
+// Another example
+ val rdd1 = sc.parallelize(List(("a", (11, 1)), ("a",(12, 3)), ("b",(10, 1))))
+  rdd1
+    .aggregateByKey((0.0, 0.0, Int.MaxValue, Int.MaxValue, 0))(
+      {
+        case ((sum1, sum2, min1, min2, count1), (v1, v2)) => (sum1 + v1, sum2 + v2, v1 min min1, v2 min min2, count1+1)
+      }, 
+      {
+        case ((sum1, sum2, min1, min2, count),(otherSum1, otherSum2, otherMin1, otherMin2, otherCount)) =>
+          (sum1 + otherSum1, sum2 + otherSum2, 
+           min1 min otherMin1, min2 min otherMin2, count + otherCount)
+      }
+    )
+    .map {
+      case (k, (sum1, sum2, min1, min2, count1)) => (k, (sum1/count1, sum2/count1, min1, min2, count1))
+    }
+    .collect()
+
+
+
+
+// Sorting - sortByKey
+val products = sc.textFile("/user/cloudera/sqoop_import/products")
+val productsMap = products.
+  map(product => (product.split(",")(1).toInt, product))
+val productsSortedByCategoryId = productsMap.sortByKey(false)
+
+val productsMap = products.
+  filter(product => product.split(",")(4) != "").
+  map(product => ((product.split(",")(1).toInt, -product.split(",")(4).toFloat), product))
+
+val productsSortedByCategoryId = productsMap.sortByKey().map(rec => rec._2) // prodycts sorted by category id in asc order and prize in desc order
+
+
+// Ranking - Global (details of top 10 products)
+val products = sc.textFile("/user/cloudera/sqoop_import/products")
+val productsMap = products.
+  filter(product => product.split(",")(4) != "").
+  map(product => (product.split(",")(4).toFloat, product))
+val productsSortedByPrice = productsMap.sortByKey(false)
+productsSortedByPrice.take(10).foreach(println)
+val products = sc.textFile("/user/cloudera/sqoop_import/products")
+products.
+  filter(product => product.split(",")(4) != "").
+  takeOrdered(10)(Ordering[Float].reverse.on(product => product.split(",")(4).toFloat)).
+  foreach(println)
+
+
+
+
+
+// Ranking - Get top N priced products with in each product category
+val products = sc.textFile("/user/cloudera/sqoop_import/products")
+val productsMap = products.
+  filter(product => product.split(",")(4) != "").
+  map(product => (product.split(",")(1).toInt, product))
+val productsGroupByCategory = productsMap.groupByKey
+
+def getTopNPricedProducts(productsIterable: Iterable[String], topN: Int): Iterable[String] = {
+  val productPrices = productsIterable.map(p => p.split(",")(4).toFloat).toSet
+  val topNPrices = productPrices.toList.sortBy(p => -p).take(topN)
+
+  val productsSorted = productsIterable.toList.sortBy(product => -product.split(",")(4).toFloat)
+  val minOfTopNPrices = topNPrices.min
+
+  val topNPricedProducts = productsSorted.takeWhile(product => product.split(",")(4).toFloat >= minOfTopNPrices)
+
+  topNPricedProducts
+}
+
+val top3PricedProductsPerCategory = productsGroupByCategory.flatMap(rec => getTopNPricedProducts(rec._2, 3))
+
+
+
+// Set operations
+
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val customers_201308 = orders.
+  filter(order => order.split(",")(1).contains("2013-08")).
+  map(order => order.split(",")(2).toInt)
+
+val customers_201309 = orders.
+  filter(order => order.split(",")(1).contains("2013-09")).
+  map(order => order.split(",")(2).toInt)
+
+// Get all the customers who placed orders in 2013 August and 2013 September
+val customers_201308_and_201309 = customers_201308.intersection(customers_201309)
+
+// Get all unique customers who placed orders in 2013 August or 2013 September
+val customers_201308_union_201309 = customers_201308.union(customers_201309).distinct
+
+// Get all customers who placed orders in 2013 August but not in 2013 September
+val customer_201308_minus_201309 = customers_201308.map(c => (c, 1)).
+  leftOuterJoin(customers_201309.map(c => (c, 1))).
+  filter(rec => rec._2._2 == None).
+  map(rec => rec._1).
+  distinct
+
+//Save in hadoop hdfs
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val orderCountByStatus = orders.map(order => (order.split(",")(3),1))
+                               .reduceByKey((totalCount,value) => value + totalCount)
+                               .map(rec => rec._1 + "\t" + rec._2)
+                               .saveAsTextFile("/user/cloudera/sqoop_import/order_count_by_status")
+
+sc.textFile("/user/cloudera/sqoop_import/order_count_by_status").collect.foreach(println)
+
+val orders = sc.textFile("/user/cloudera/sqoop_import/orders")
+val orderCountByStatus = orders.map(order => (order.split(",")(3),1))
+                               .reduceByKey((totalCount,value) => value + totalCount)
+                               .map(rec => rec._1 + "\t" + rec._2)
+                               .saveAsTextFile("/user/cloudera/sqoop_import/order_count_by_status_snappy",classOf[org.apache.hadoop.io.compress.SnappyCodec])
+
+sc.textFile("/user/cloudera/sqoop_import/order_count_by_status_snappy").collect.foreach(println)
+
